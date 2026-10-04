@@ -1,7 +1,8 @@
 # 🌧️ Pluja acumulada a Catalunya
 
 Aplicació local amb Python i Streamlit per visualitzar la precipitació acumulada
-del dia civil de Catalunya a les estacions automàtiques XEMA de Meteocat.
+del dia civil de Catalunya, o d'un interval de dates i hores, a les estacions
+automàtiques XEMA de Meteocat.
 El mapa mostra observacions puntuals: no interpola la pluja entre estacions.
 **1 mm de precipitació equival a 1 litre/m².**
 
@@ -46,9 +47,12 @@ horaris per a `zoneinfo`, especialment necessària a Windows.
 ## Ús
 
 - El selector de data comença amb el dia actual a `Europe/Madrid`.
+- «Entre dues dates i hores» permet triar data i hora d'inici i de final,
+  en hora local de Catalunya, i aplicar-les amb «Mostra acumulat».
+  El mateix període afecta el mapa, el resum i el rànquing.
 - «Actualitza dades» buida les consultes de la cache; la cache caduca als 300 segons.
 - «Comarca» i «Precipitació mínima» afecten el mapa, el rànquing i el resum
-  d'estacions i màxims. La darrera lectura disponible correspon al conjunt del dia.
+  d'estacions i màxims. La darrera lectura disponible correspon al conjunt del període.
 - Els punts representen l'acumulat amb set trams de color i mida. Passant-hi el
   cursor es veuen el nom, municipi, comarca, acumulat, lectures, última lectura
   amb el seu fus horari i estat de les dades. En tocar o clicar una estació,
@@ -60,6 +64,25 @@ horaris per a `zoneinfo`, especialment necessària a Windows.
   ordenar-la clicant les capçaleres.
 - Les estacions sense lectures no es dibuixen com si haguessin registrat 0 mm.
   Les estacions amb lectures però sense coordenades vàlides apareixen a la taula.
+
+### Acumulat entre dos timestamps
+
+L'inici queda **inclòs** i el final queda **exclòs**: se sumen les lectures amb
+`inici <= data_lectura < final`, després de convertir els dos límits locals a UTC.
+Per exemple, del 04/10/2026 a les 00:00 CEST al 04/10/2026 a les 02:00 CEST es
+consulten lectures des del 03/10/2026 a les 22:00 UTC fins al 04/10/2026 a les
+00:00 UTC, sense incloure aquesta última lectura.
+
+Els selectors proposen salts de 30 minuts i també permeten introduir altres
+minuts. **La resolució de les mesures és de 30 minuts (SH) o una hora (HO)**:
+es compta el valor complet de les lectures que tenen l'inici dins del període.
+No s'interpola ni es prorrateja la precipitació quan un límit talla un interval.
+
+El final ha de ser posterior a l'inici. Es permeten fins a **31 dies civils per
+consulta** per mantenir les consultes manejables a l'allotjament gratuït.
+Les hores inexistents del canvi d'hora de primavera es rebutgen; per a una hora
+repetida a la tardor es pot escollir la primera ocurrència (CEST) o la segona (CET).
+El formulari aplica els quatre camps junts per evitar consultes durant l'edició.
 
 ## Publicació gratuïta
 
@@ -102,7 +125,9 @@ Meteocat etiqueta `data_lectura` amb l'inici de l'interval en Temps Universal.
 L'aplicació construeix separadament les dues mitjanits locals, les converteix
 a UTC i consulta només aquesta variable i aquest interval `[inici, final)`.
 Després interpreta les lectures com UTC, les converteix a `Europe/Madrid`
-i torna a filtrar el dia local abans de sumar.
+i torna a filtrar el període abans de sumar. La vista diària és el mateix càlcul
+amb les dues mitjanits locals com a límits; la vista d'interval utilitza els
+timestamps seleccionats.
 
 Un dia d'estiu va de les 22:00 UTC del dia anterior a les 22:00 UTC del dia
 seleccionat; a l'hivern, de les 23:00 a les 23:00. Els dies de canvi d'hora
@@ -110,7 +135,8 @@ poden tenir 23 o 25 hores. Les dues ocurrències d'una hora repetida continuen
 sent lectures diferents perquè es dedupliquen amb la data UTC.
 
 Només es demanen els camps necessaris, amb filtre de qualitat a l'API i
-pàgines de fins a 50.000 registres amb ordre explícit. Hi ha temps d'espera
+pàgines de fins a 50.000 registres amb ordre explícit, també en períodes de diversos
+dies. Hi ha temps d'espera
 HTTP, reintents limitats i tractament d'errors, respostes buides i valors corruptes.
 No es descarrega tot l'històric ni es fa scraping del web de Meteocat.
 El mapa base CARTO / OpenStreetMap també funciona sense clau.
@@ -130,7 +156,9 @@ determinista per identificador i valor; els conflictes s'avisen a la pantalla.
 
 Cada estació utilitza **una sola base temporal per dia**: es prioritza `SH`
 (30 minuts) i només s'utilitza `HO` (una hora) quan no hi ha lectures `SH`.
-Mai se sumen totes dues bases. Si la base prioritzada és incompleta, no es
+En períodes de diversos dies, una estació pot utilitzar HO un dia i SH un altre:
+es conserven tots dos dies, sense duplicar bases dins d'un mateix dia.
+Mai se sumen totes dues bases dins d'un mateix dia. Si la base prioritzada és incompleta, no es
 barreja amb l'altra per omplir buits: l'acumulat s'indica com a parcial.
 
 Per a dies acabats es compara el nombre de lectures amb les esperades durant
@@ -138,6 +166,9 @@ tot el dia (46, 48 o 50 per a `SH`). Per a avui es compara fins a l'inici de
 l'últim interval publicat al conjunt d'estacions. Aquesta comprovació orientativa
 detecta mancances i retard d'estacions; no substitueix la validació de Meteocat.
 L'acumulat d'avui és sempre provisional mentre el dia continua.
+En un interval acabat, es comproven les lectures esperades dins dels límits
+seleccionats, inclosos els dies sense cap lectura. Si el final encara és futur,
+la comprovació arriba només fins a l'últim inici d'interval publicat.
 
 L'esquema de metadades es consulta abans de seleccionar camps. Es reconeixen
 `latitud` i `longitud` WGS84 i, com a alternativa, el punt GeoJSON
@@ -167,6 +198,12 @@ pandas 3.0.6 i Pydeck 0.9.3:
   paginació, resposta buida i errors de xarxa.
 - Proves d'interfície amb `Streamlit AppTest`: rànquing, comarca, mínim,
   resultats buits, només dades validades i refresc de la cache.
+- Ampliació a intervals: límit final exclòs, precisió en minuts, conversió UTC,
+  hores inexistents/repetides, canvi de base entre dies, dies sencers sense dades
+  i límit de 31 dies en un canvi d'hora. Formulari i filtres d'interval provats
+  amb `AppTest`, inclosa la validació d'un final anterior o igual a l'inici.
+- Interval real del 04/10/2026 de 00:00 a 02:00 CEST: Barcelona - el Raval,
+  47,4 mm en quatre lectures, amb el final exclòs i sense duplicats.
 - Revisió responsive a amplades de 320 i 390 píxels, sense desbordament de la
   pantalla principal, amb mapa d'alçada adaptable i filtres plegats inicialment.
   Selecció d'una estació comprovada al navegador: la fitxa mostra Granollers,

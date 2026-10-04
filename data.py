@@ -1,4 +1,4 @@
-"""Dades públiques XEMA: consultes SODA i acumulats del dia civil català."""
+"""Dades públiques XEMA: consultes SODA i acumulats per dia o interval."""
 
 from datetime import date, datetime, time, timedelta, timezone
 import math
@@ -18,6 +18,7 @@ STATIONS_DATASET = "yqwd-vj5e"
 PRECIPITATION_VARIABLE = "35"
 LOCAL_TZ = ZoneInfo("Europe/Madrid")
 PAGE_SIZE = 50_000
+MAX_INTERVAL_DAYS = 31
 MEASUREMENT_COLUMNS = [
     "id", "codi_estacio", "codi_variable", "data_lectura",
     "valor_lectura", "codi_estat", "codi_base",
@@ -45,6 +46,44 @@ def day_bounds_utc(selected_day: date) -> tuple[datetime, datetime]:
     start = datetime.combine(selected_day, time.min, tzinfo=LOCAL_TZ)
     end = datetime.combine(selected_day + timedelta(days=1), time.min, tzinfo=LOCAL_TZ)
     return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+
+def local_datetime_candidates(value: datetime) -> list[datetime]:
+    """0 candidats: hora inexistent; 2: hora repetida en el canvi d'hora."""
+    if value.tzinfo is not None:
+        raise DataError("La data i hora local ha d'arribar sense fus horari.")
+    candidates = {}
+    for fold in (0, 1):
+        local = value.replace(tzinfo=LOCAL_TZ, fold=fold)
+        utc = local.astimezone(timezone.utc)
+        if utc.astimezone(LOCAL_TZ).replace(tzinfo=None) == value:
+            candidates[utc] = local
+    return [candidates[utc] for utc in sorted(candidates)]
+
+
+def resolve_local_datetime(value: datetime, occurrence: int | None = None) -> datetime:
+    candidates = local_datetime_candidates(value)
+    if not candidates:
+        raise DataError(f"L'hora {value:%d/%m/%Y %H:%M} no existeix a Catalunya pel canvi d'hora. Tria una altra hora.")
+    if len(candidates) == 2 and occurrence is None:
+        raise DataError("Aquesta hora es repeteix pel canvi d'hora. Tria la primera o la segona ocurrència.")
+    if occurrence not in (None, 0, 1) or (occurrence == 1 and len(candidates) != 2):
+        raise DataError("L'ocurrència de l'hora seleccionada no és vàlida.")
+    return candidates[occurrence or 0]
+
+
+def interval_bounds_utc(start: datetime, end: datetime) -> tuple[datetime, datetime]:
+    if start.utcoffset() is None or end.utcoffset() is None:
+        raise DataError("L'inici i el final han d'incloure un fus horari.")
+    start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+    if end_utc <= start_utc:
+        raise DataError("El final ha de ser posterior a l'inici.")
+    # El límit és civil: un període de 31 dies pot contenir una hora addicional.
+    civil_duration = (end.astimezone(LOCAL_TZ).replace(tzinfo=None)
+                      - start.astimezone(LOCAL_TZ).replace(tzinfo=None))
+    if civil_duration > timedelta(days=MAX_INTERVAL_DAYS):
+        raise DataError(f"Tria un període de com a màxim {MAX_INTERVAL_DAYS} dies per consulta.")
+    return start_utc, end_utc
 
 
 def _session() -> requests.Session:
@@ -85,7 +124,7 @@ def get_schema(dataset_id: str) -> list[dict]:
 
 
 def _fetch_rows(dataset_id: str, params: dict, page_size: int = PAGE_SIZE) -> list[dict]:
-    """Pàgines ordenades; la consulta de lectures sempre es restringeix a un dia."""
+    """Pàgines ordenades; la consulta es restringeix al període seleccionat."""
     rows = []
     with _session() as session:
         offset = 0
@@ -102,19 +141,25 @@ def _fetch_rows(dataset_id: str, params: dict, page_size: int = PAGE_SIZE) -> li
             offset += page_size
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def fetch_measurements(selected_day: date, include_provisional: bool = True) -> tuple[list[dict], datetime]:
+    start, end = day_bounds_utc(selected_day)
+    return fetch_interval_measurements(start, end, include_provisional)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_interval_measurements(start_utc: datetime, end_utc: datetime,
+                                include_provisional: bool = True) -> tuple[list[dict], datetime]:
+    start, end = interval_bounds_utc(start_utc, end_utc)
     schema_fields = {column.get("fieldName") for column in get_schema(MEASUREMENTS_DATASET)}
     missing = set(MEASUREMENT_COLUMNS[1:]) - schema_fields
     if missing:
         raise DataError(f"Falten camps a l'esquema de lectures: {', '.join(sorted(missing))}.")
     columns = [column for column in MEASUREMENT_COLUMNS if column in schema_fields]
-    start, end = day_bounds_utc(selected_day)
     # calendar_date no porta sufix Z, però Meteocat documenta aquestes hores com UTC.
     where = (
         f"codi_variable = '{PRECIPITATION_VARIABLE}' "
-        f"AND data_lectura >= '{start.strftime('%Y-%m-%dT%H:%M:%S')}' "
-        f"AND data_lectura < '{end.strftime('%Y-%m-%dT%H:%M:%S')}' "
+        f"AND data_lectura >= '{start.replace(tzinfo=None).isoformat()}' "
+        f"AND data_lectura < '{end.replace(tzinfo=None).isoformat()}' "
     )
     if include_provisional:
         where += "AND (codi_estat IN ('V', 'T') OR codi_estat IS NULL OR codi_estat IN ('', ' '))"
@@ -218,6 +263,23 @@ def fetch_stations() -> pd.DataFrame:
 
 
 def calculate_totals(rows: list[dict], selected_day: date, include_provisional: bool = True) -> tuple[pd.DataFrame, dict]:
+    start, end = day_bounds_utc(selected_day)
+    return calculate_interval_totals(rows, start, end, include_provisional)
+
+
+def _expected_slots(start: datetime, end: datetime, base: str) -> int:
+    """Nombre d'inicis d'interval SH/HO dins [start, end), alineats en UTC."""
+    minutes = 30 if base == "SH" else 60
+    step = timedelta(minutes=minutes)
+    first = start.replace(minute=(start.minute // minutes) * minutes, second=0, microsecond=0)
+    if first < start:
+        first += step
+    return max(0, -((first - end) // step))
+
+
+def calculate_interval_totals(rows: list[dict], start: datetime, end: datetime,
+                               include_provisional: bool = True) -> tuple[pd.DataFrame, dict]:
+    start, end = interval_bounds_utc(start, end)
     report = {"rebudes": len(rows), "descartades": 0, "duplicades": 0,
               "conflictes": 0, "altres_bases": 0, "estacions_bases_mixtes": 0}
     if not rows:
@@ -234,7 +296,7 @@ def calculate_totals(rows: list[dict], selected_day: date, include_provisional: 
         & frame["codi_estat"].isin(accepted_states) & frame["codi_base"].isin(["SH", "HO"])
         & frame["valor_lectura"].notna() & frame["valor_lectura"].ge(0)
         & frame["valor_lectura"].map(lambda value: pd.notna(value) and math.isfinite(value))
-        & frame["hora_local"].dt.date.eq(selected_day)
+        & frame["data_lectura"].ge(start) & frame["data_lectura"].lt(end)
     )
     report["descartades"] = int((~valid).sum())
     frame = frame.loc[valid].copy()
@@ -248,10 +310,12 @@ def calculate_totals(rows: list[dict], selected_day: date, include_provisional: 
     before = len(frame)
     frame = frame.drop_duplicates(keys, keep="first")
     report["duplicades"] = before - len(frame)
-    bases_per_station = frame.groupby("codi_estacio")["codi_base"].nunique()
+    frame["_dia"] = frame["hora_local"].dt.date
+    daily_keys = ["codi_estacio", "_dia"]
+    bases_per_station = frame.groupby(daily_keys)["codi_base"].nunique()
     report["estacions_bases_mixtes"] = int((bases_per_station > 1).sum())
-    # Una sola base per estació/dia: SH si existeix; HO només si no hi ha SH.
-    preferred = frame.groupby("codi_estacio")["codi_base"].transform(
+    # Una sola base per estació i dia; una estació pot canviar de base entre dies.
+    preferred = frame.groupby(daily_keys)["codi_base"].transform(
         lambda bases: "SH" if "SH" in set(bases) else "HO"
     )
     keep_base = frame["codi_base"].eq(preferred)
@@ -260,17 +324,30 @@ def calculate_totals(rows: list[dict], selected_day: date, include_provisional: 
     frame["_provisional"] = frame["codi_estat"].ne("V")
     totals = frame.groupby("codi_estacio", as_index=False).agg(
         precipitacio=("valor_lectura", "sum"), lectures=("valor_lectura", "size"),
-        ultima_lectura=("hora_local", "max"), codi_base=("codi_base", "first"),
+        ultima_lectura=("hora_local", "max"),
+        codi_base=("codi_base", lambda bases: " / ".join(sorted(set(bases)))),
         lectures_provisionals=("_provisional", "sum"),
     )
-    start, end = day_bounds_utc(selected_day)
     latest = frame["data_lectura"].max()
-    def expected(base: str) -> int:
-        minutes = 30 if base == "SH" else 60
-        if selected_day < today_local():
-            return int((end - start).total_seconds() // (minutes * 60))
-        return int((latest.to_pydatetime() - start).total_seconds() // (minutes * 60)) + 1
-    totals["lectures_esperades"] = totals["codi_base"].map(expected)
+    # Si el final encara és futur, s'exigeixen només els inicis ja publicats.
+    expected_end = end
+    if end > datetime.now(timezone.utc):
+        expected_end = min(end, latest.to_pydatetime() + timedelta(microseconds=1))
+    segments = []
+    day = start.astimezone(LOCAL_TZ).date()
+    while day <= (expected_end - timedelta(microseconds=1)).astimezone(LOCAL_TZ).date():
+        day_start, day_end = day_bounds_utc(day)
+        segments.append((day, max(start, day_start), min(expected_end, day_end)))
+        day += timedelta(days=1)
+    daily_bases = frame.drop_duplicates(daily_keys).set_index(daily_keys)["codi_base"].to_dict()
+    expected_counts = []
+    for station in totals.itertuples():
+        fallback = "SH" if "SH" in station.codi_base else "HO"
+        expected_counts.append(sum(
+            _expected_slots(left, right, daily_bases.get((station.codi_estacio, day), fallback))
+            for day, left, right in segments
+        ))
+    totals["lectures_esperades"] = expected_counts
     totals["estat_dades"] = totals["lectures_provisionals"].map(
         lambda count: "Pendent de validació" if count else "Validades (V)"
     )
@@ -280,9 +357,17 @@ def calculate_totals(rows: list[dict], selected_day: date, include_provisional: 
 
 
 def load_daily_data(selected_day: date, include_provisional: bool = True) -> tuple[pd.DataFrame, dict]:
-    rows, queried_at = fetch_measurements(selected_day, include_provisional)
+    start, end = day_bounds_utc(selected_day)
+    return load_interval_data(start, end, include_provisional)
+
+
+def load_interval_data(start: datetime, end: datetime,
+                       include_provisional: bool = True) -> tuple[pd.DataFrame, dict]:
+    # Normalitzar abans de consultar la cache distingeix les dues hores repetides.
+    start, end = interval_bounds_utc(start, end)
+    rows, queried_at = fetch_interval_measurements(start, end, include_provisional)
     stations = fetch_stations()
-    totals, report = calculate_totals(rows, selected_day, include_provisional)
+    totals, report = calculate_interval_totals(rows, start, end, include_provisional)
     merged = totals.merge(stations, on="codi_estacio", how="left", validate="one_to_one")
     for field in ("nom", "municipi", "comarca", "estat_estacio"):
         merged[field] = merged[field].fillna("Sense metadades")
@@ -290,6 +375,8 @@ def load_daily_data(selected_day: date, include_provisional: bool = True) -> tup
     merged.loc[unknown_names, "nom"] = merged.loc[unknown_names, "codi_estacio"]
     report.update({
         "consulta": queried_at,
+        "inici": start.astimezone(LOCAL_TZ), "final": end.astimezone(LOCAL_TZ),
+        "en_curs": end > datetime.now(timezone.utc),
         "ultima_lectura": totals["ultima_lectura"].max() if not totals.empty else None,
         "sense_coordenades": int(merged[["latitud", "longitud"]].isna().any(axis=1).sum()),
         "acumulats_parcials": int((totals["lectures"] < totals["lectures_esperades"]).sum()),
@@ -300,6 +387,6 @@ def load_daily_data(selected_day: date, include_provisional: bool = True) -> tup
 
 
 def clear_cache() -> None:
-    fetch_measurements.clear()
+    fetch_interval_measurements.clear()
     fetch_stations.clear()
     get_schema.clear()
