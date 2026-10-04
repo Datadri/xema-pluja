@@ -5,6 +5,9 @@ del dia civil de Catalunya a les estacions automàtiques XEMA de Meteocat.
 El mapa mostra observacions puntuals: no interpola la pluja entre estacions.
 **1 mm de precipitació equival a 1 litre/m².**
 
+**Aplicació pública:** [xema-pluja.streamlit.app](https://xema-pluja.streamlit.app/).
+Funciona també en mòbil i es pot compartir sense iniciar sessió.
+
 ## Instal·lació i execució
 
 Cal Python 3.10 o superior i connexió a Internet. Des d'aquesta carpeta:
@@ -60,11 +63,11 @@ horaris per a `zoneinfo`, especialment necessària a Windows.
 
 ## Publicació gratuïta
 
-L'aplicació es pot allotjar a [Streamlit Community Cloud](https://share.streamlit.io/),
-amb un enllaç públic `https://<nom>.streamlit.app`, sense servidor propi ni API key.
+L'aplicació està publicada a [xema-pluja.streamlit.app](https://xema-pluja.streamlit.app/)
+amb [Streamlit Community Cloud](https://share.streamlit.io/), sense servidor propi ni API key.
 El servei es connecta a un repositori de GitHub i instal·la `requirements.txt`.
 
-Per desplegar-la:
+Configuració utilitzada per al desplegament:
 
 1. Inicia sessió a Streamlit Community Cloud amb GitHub.
 2. Crea una aplicació des del repositori `Datadri/xema-pluja`.
@@ -79,8 +82,9 @@ inactivitat; en tornar a obrir l'enllaç, es reactiva.
 
 [Instruccions oficials de desplegament](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy).
 
-L'enllaç definitiu només existeix després de completar el desplegament a
-Community Cloud. El repositori de codi, per si sol, no executa l'aplicació.
+El desplegament es va completar el **4 d'octubre de 2026** amb Python 3.13.
+Es van comprovar al navegador el mapa, el rànquing i les dades de 185 estacions,
+a més de l'opció de compartir «Make this app public» activada.
 
 ## Dades i càlcul
 
