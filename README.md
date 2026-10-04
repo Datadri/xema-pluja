@@ -57,6 +57,9 @@ horaris per a `zoneinfo`, especialment necessària a Windows.
   cursor es veuen el nom, municipi, comarca, acumulat, lectures, última lectura
   amb el seu fus horari i estat de les dades. En tocar o clicar una estació,
   aquests detalls també apareixen en una fitxa sota el mapa.
+- La fitxa inclou un histograma de l'estació, amb horitzons d'1, 3, 7, 15 o 30
+  dies i agrupació per hores o per dies. Passa el cursor per una barra per veure
+  la pluja, el nombre de lectures i l'estat de les dades.
 - En mòbil, els indicadors són compactes, la llegenda ocupa diverses línies i
   l'alçada del mapa s'adapta a la pantalla. Els filtres s'obren amb la fletxa
   de la cantonada superior esquerra. La taula es pot desplaçar horitzontalment.
@@ -84,6 +87,34 @@ Les hores inexistents del canvi d'hora de primavera es rebutgen; per a una hora
 repetida a la tardor es pot escollir la primera ocurrència (CEST) o la segona (CET).
 El formulari aplica els quatre camps junts per evitar consultes durant l'edició.
 
+### Histograma d'una estació
+
+Toca o clica un punt del mapa. Sota el mapa apareixen la fitxa i els selectors
+«Horitzó temporal» i «Agrupa la pluja per». La taula «Lectures agrupades de
+l'històric» permet revisar o descarregar els mateixos valors del gràfic.
+
+Els horitzons són **finestres mòbils de 24, 72, 168, 360 o 720 hores** que acaben
+al final del període seleccionat. Per a avui, el final es limita al tall de mitja
+hora actual per no consultar hores futures. L'inici s'inclou i el final s'exclou.
+El text sobre el gràfic indica els límits exactes, en hora de Catalunya.
+
+Cada barra suma la precipitació d'una hora real o d'un dia local. Les dues hores
+repetides de tardor són barres diferents, etiquetades CEST i CET; els dies locals
+poden tenir 23, 24 o 25 hores. Una finestra que comença o acaba a mig dia pot
+incloure dos dies extrems incomplets: només s'hi sumen les lectures dins la finestra.
+La resolució original de 30/60 minuts i el criteri de lectura completa es mantenen.
+
+**Sense lectures no significa 0 mm**: els valors sense dades queden nuls al
+gràfic i a la taula. Les barres amb lectures absents es destaquen en taronja i
+l'acumulat s'avisa com a parcial. El filtre lateral de dades validades també
+afecta l'històric. Es reutilitzen els mateixos controls de qualitat, deduplicació
+i base temporal per estació i dia que al mapa.
+
+La consulta de l'històric es fa només quan se selecciona una estació, amb filtre
+`codi_estacio`, variable 35 i límits UTC a Socrata. La cache de 300 segons es
+comparteix entre les agrupacions horària i diària: canviar l'agrupació no torna
+a descarregar les lectures. No s'ha afegit cap dependència per al gràfic.
+
 ## Publicació gratuïta
 
 L'aplicació està publicada a [xema-pluja.streamlit.app](https://xema-pluja.streamlit.app/)
@@ -105,7 +136,8 @@ inactivitat; en tornar a obrir l'enllaç, es reactiva.
 
 [Instruccions oficials de desplegament](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy).
 
-El desplegament es va completar el **4 d'octubre de 2026** amb Python 3.13.
+El desplegament es va completar el **4 d'octubre de 2026**. La versió local
+provada és Python 3.13; els logs del servei públic indiquen Python 3.14.7.
 Es van comprovar al navegador el mapa, el rànquing i les dades de 185 estacions,
 a més de l'opció de compartir «Make this app public» activada.
 
@@ -202,6 +234,11 @@ pandas 3.0.6 i Pydeck 0.9.3:
   hores inexistents/repetides, canvi de base entre dies, dies sencers sense dades
   i límit de 31 dies en un canvi d'hora. Formulari i filtres d'interval provats
   amb `AppTest`, inclosa la validació d'un final anterior o igual a l'inici.
+- Histogrames: 17 proves de càlcul en total, amb barres horàries i diàries,
+  hores repetides, dies de 23/25 hores, valors nuls i buits de lectures, canvis
+  de base i filtres de qualitat. Els cinc horitzons s'han consultat a l'API real
+  per al Raval; els totals horaris i diaris coincideixen. Controls d'horitzó i
+  agrupació comprovats amb `AppTest`, i clic a Granollers verificat al navegador.
 - Interval real del 04/10/2026 de 00:00 a 02:00 CEST: Barcelona - el Raval,
   47,4 mm en quatre lectures, amb el final exclòs i sense duplicats.
 - Revisió responsive a amplades de 320 i 390 píxels, sense desbordament de la

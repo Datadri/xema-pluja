@@ -1,13 +1,13 @@
 """Interfície Streamlit del mapa de precipitació acumulada XEMA."""
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 import pydeck as pdk
 import streamlit as st
 
-from data import (LOCAL_TZ, MAX_INTERVAL_DAYS, DataError, clear_cache, day_bounds_utc,
+from data import (HISTORY_DAYS, LOCAL_TZ, MAX_INTERVAL_DAYS, DataError, clear_cache, day_bounds_utc,
                   interval_bounds_utc, load_interval_data, local_datetime_candidates,
-                  resolve_local_datetime)
+                  load_station_history, resolve_local_datetime)
 
 st.set_page_config(page_title="Pluja acumulada a Catalunya", page_icon="🌧️",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -72,7 +72,75 @@ def rain_style(value: float) -> tuple[list[int], int]:
     return SCALE[-1][2], SCALE[-1][3]
 
 
-def render_map(frame) -> None:
+def render_station_history(station_code: str, period_end: datetime, include_provisional: bool) -> None:
+    st.markdown("#### Histograma de precipitació")
+    days = st.radio("Horitzó temporal", HISTORY_DAYS, horizontal=True, key="history_days",
+                     format_func=lambda value: "1 dia" if value == 1 else f"{value} dies")
+    grouping = st.radio("Agrupa la pluja per", ["Hores", "Dies"], horizontal=True, key="history_grouping")
+    # Per a avui, no es consulta més enllà de l'últim tall de mitja hora.
+    now = datetime.now(timezone.utc)
+    current_cutoff = now.replace(minute=now.minute // 30 * 30, second=0, microsecond=0)
+    history_end = min(period_end.astimezone(timezone.utc), current_cutoff)
+    try:
+        with st.spinner("Consultant l'històric d'aquesta estació…"):
+            history, report = load_station_history(station_code, history_end, days, grouping, include_provisional)
+    except DataError as exc:
+        st.warning(str(exc))
+        st.caption("Prem «Actualitza dades» per tornar a consultar l'històric.")
+        return
+    st.caption(f"Darreres {days * 24} hores · {report['inici']:%d/%m/%Y %H:%M %Z} → "
+               f"{report['final']:%d/%m/%Y %H:%M %Z}. Inici inclòs, final exclòs.")
+    if not report["lectures"]:
+        st.info("Aquesta estació no té lectures disponibles per a aquest horitzó i criteri de validació.")
+        return
+    st.write(f"Acumulat de l'històric: **{report['precipitacio']:.1f} mm** · "
+             f"**{report['lectures']}** lectures")
+    st.caption(f"Última lectura de l'històric: {report['ultima_lectura']:%d/%m/%Y %H:%M %Z}")
+    # Etiquetes locals explícites: l'hora del gràfic no depèn del fus del navegador.
+    spec = {
+        "height": 280,
+        "mark": {"type": "bar", "tooltip": True},
+        "encoding": {
+            "x": {"field": "periode", "type": "ordinal", "title": "Hora local de Catalunya" if grouping == "Hores" else "Dia local de Catalunya",
+                  "sort": {"field": "ordre", "order": "ascending"},
+                  "axis": {"labelAngle": -45, "labelOverlap": True, "labelLimit": 130}},
+            "y": {"field": "precipitacio", "type": "quantitative", "title": "Precipitació (mm)",
+                  "scale": {"zero": True}},
+            "color": {"field": "cobertura", "type": "nominal", "title": None,
+                      "scale": {"domain": ["Complet", "Acumulat parcial"], "range": ["#2563eb", "#f59e0b"]},
+                      "legend": {"orient": "bottom"}},
+            "tooltip": [
+                {"field": "inici", "type": "nominal", "title": "Inici"},
+                {"field": "final", "type": "nominal", "title": "Final"},
+                {"field": "precipitacio", "type": "quantitative", "title": "Pluja (mm)", "format": ".1f"},
+                {"field": "lectures", "type": "quantitative", "title": "Lectures"},
+                {"field": "lectures_esperades", "type": "quantitative", "title": "Lectures esperades"},
+                {"field": "estat", "type": "nominal", "title": "Estat"},
+            ],
+        },
+    }
+    st.vega_lite_chart(history, spec, width="stretch", key="station_histogram")
+    st.caption("Cada barra suma la pluja d'aquella hora o dia. Els buits sense lectures no equivalen a 0 mm. "
+               "Les hores repetides es distingeixen amb CEST/CET; els dies segueixen les mitjanits de Catalunya.")
+    if report["barres_sense_dades"] or report["barres_parcials"]:
+        st.warning(f"Històric incomplet: {report['barres_sense_dades']} períodes sense lectures i "
+                   f"{report['barres_parcials']} períodes amb lectures incompletes. L'acumulat disponible pot ser parcial.")
+    if report["provisionals"]:
+        st.caption("⚠️ L'històric inclou dades pendents de validació definitiva per Meteocat.")
+    if report["conflictes"] or report["altres_bases"] or report["descartades"]:
+        st.caption(f"Control de qualitat de l'històric: {report['conflictes']} duplicats amb valors diferents, "
+                   f"{report['altres_bases']} lectures de bases alternatives excloses i "
+                   f"{report['descartades']} registres no vàlids descartats.")
+    with st.expander("Lectures agrupades de l'històric"):
+        table = history[["inici", "final", "precipitacio", "lectures", "lectures_esperades", "estat"]].rename(columns={
+            "inici": "Inici", "final": "Final", "precipitacio": "Precipitació", "lectures": "Lectures",
+            "lectures_esperades": "Esperades", "estat": "Estat",
+        })
+        st.dataframe(table, hide_index=True, width="stretch",
+                     column_config={"Precipitació": st.column_config.NumberColumn(format="%.1f mm")})
+
+
+def render_map(frame, period_end: datetime, include_provisional: bool) -> None:
     # Dibuixa els episodis més intensos al final perquè quedin per sobre dels altres punts.
     points = frame.dropna(subset=["latitud", "longitud"]).sort_values("precipitacio").copy()
     points["color"] = points["precipitacio"].map(lambda value: rain_style(value)[0])
@@ -104,7 +172,8 @@ def render_map(frame) -> None:
         rgb = ",".join(map(str, color[:3]))
         items.append(f'<span><i style="background:rgb({rgb});"></i>{label}</span>')
     st.markdown('<div class="rain-legend">' + "".join(items) + "</div>", unsafe_allow_html=True)
-    st.caption("Toca o clica una estació per veure'n les dades. Pots ampliar el mapa amb els botons + i −.")
+    st.caption("Toca o clica una estació per veure'n les dades i l'histograma de pluja. "
+               "Pots ampliar el mapa amb els botons + i −.")
     st.caption("Els llindars superiors són inclusius. 1 mm de precipitació = 1 litre/m². "
                "Mapa base: CARTO / OpenStreetMap.")
     selected_objects = selection.selection.objects.get("estacions-xema", [])
@@ -122,6 +191,7 @@ def render_map(frame) -> None:
                          f"Nombre de lectures: {station['lectures']}")
                 st.caption(f"Última lectura: {station['ultima_lectura']:%d/%m/%Y %H:%M %Z}")
                 st.caption(f"Estat de les dades: {station['estat_dades']}")
+                render_station_history(station_code, period_end, include_provisional)
 
 
 def choose_local_timestamp(value: datetime, label: str, key: str) -> datetime:
@@ -243,7 +313,7 @@ def main() -> None:
         st.warning("No hi ha lectures de precipitació disponibles per a aquest període i aquest criteri de validació.")
     elif filtered.empty:
         st.info("Cap estació compleix els filtres seleccionats.")
-    render_map(filtered)
+    render_map(filtered, end, include_provisional)
     if notices:
         st.warning(". ".join(notices) + ".")
     st.subheader("Top estacions per precipitació")

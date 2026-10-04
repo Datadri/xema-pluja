@@ -19,6 +19,7 @@ PRECIPITATION_VARIABLE = "35"
 LOCAL_TZ = ZoneInfo("Europe/Madrid")
 PAGE_SIZE = 50_000
 MAX_INTERVAL_DAYS = 31
+HISTORY_DAYS = (1, 3, 7, 15, 30)
 MEASUREMENT_COLUMNS = [
     "id", "codi_estacio", "codi_variable", "data_lectura",
     "valor_lectura", "codi_estat", "codi_base",
@@ -148,7 +149,8 @@ def fetch_measurements(selected_day: date, include_provisional: bool = True) -> 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_interval_measurements(start_utc: datetime, end_utc: datetime,
-                                include_provisional: bool = True) -> tuple[list[dict], datetime]:
+                                include_provisional: bool = True,
+                                station_code: str | None = None) -> tuple[list[dict], datetime]:
     start, end = interval_bounds_utc(start_utc, end_utc)
     schema_fields = {column.get("fieldName") for column in get_schema(MEASUREMENTS_DATASET)}
     missing = set(MEASUREMENT_COLUMNS[1:]) - schema_fields
@@ -161,6 +163,9 @@ def fetch_interval_measurements(start_utc: datetime, end_utc: datetime,
         f"AND data_lectura >= '{start.replace(tzinfo=None).isoformat()}' "
         f"AND data_lectura < '{end.replace(tzinfo=None).isoformat()}' "
     )
+    if station_code is not None:
+        station_code = _validate_station_code(station_code)
+        where += f"AND codi_estacio = '{station_code}' "
     if include_provisional:
         where += "AND (codi_estat IN ('V', 'T') OR codi_estat IS NULL OR codi_estat IN ('', ' '))"
     else:
@@ -277,13 +282,14 @@ def _expected_slots(start: datetime, end: datetime, base: str) -> int:
     return max(0, -((first - end) // step))
 
 
-def calculate_interval_totals(rows: list[dict], start: datetime, end: datetime,
-                               include_provisional: bool = True) -> tuple[pd.DataFrame, dict]:
+def _prepare_measurements(rows: list[dict], start: datetime, end: datetime,
+                          include_provisional: bool = True) -> tuple[pd.DataFrame, dict]:
+    """Qualitat, deduplicació i base compartides pel mapa i els histogrames."""
     start, end = interval_bounds_utc(start, end)
     report = {"rebudes": len(rows), "descartades": 0, "duplicades": 0,
               "conflictes": 0, "altres_bases": 0, "estacions_bases_mixtes": 0}
     if not rows:
-        return pd.DataFrame(columns=TOTAL_COLUMNS), report
+        return pd.DataFrame(columns=MEASUREMENT_COLUMNS + ["hora_local", "_dia", "_provisional"]), report
     frame = pd.DataFrame(rows).reindex(columns=MEASUREMENT_COLUMNS)
     for field in ("id", "codi_estacio", "codi_variable", "codi_estat", "codi_base"):
         frame[field] = frame[field].fillna("").astype("string").str.strip().str.upper()
@@ -301,7 +307,7 @@ def calculate_interval_totals(rows: list[dict], start: datetime, end: datetime,
     report["descartades"] = int((~valid).sum())
     frame = frame.loc[valid].copy()
     if frame.empty:
-        return pd.DataFrame(columns=TOTAL_COLUMNS), report
+        return frame, report
     keys = ["codi_estacio", "data_lectura", "codi_variable", "codi_base"]
     report["conflictes"] = int((frame.groupby(keys)["valor_lectura"].nunique() > 1).sum())
     # Prioritat V > T > sense estat; empat determinista pel codi de registre i valor.
@@ -322,6 +328,16 @@ def calculate_interval_totals(rows: list[dict], start: datetime, end: datetime,
     report["altres_bases"] = int((~keep_base).sum())
     frame = frame.loc[keep_base].copy()
     frame["_provisional"] = frame["codi_estat"].ne("V")
+    return frame, report
+
+
+def calculate_interval_totals(rows: list[dict], start: datetime, end: datetime,
+                               include_provisional: bool = True) -> tuple[pd.DataFrame, dict]:
+    start, end = interval_bounds_utc(start, end)
+    frame, report = _prepare_measurements(rows, start, end, include_provisional)
+    if frame.empty:
+        return pd.DataFrame(columns=TOTAL_COLUMNS), report
+    daily_keys = ["codi_estacio", "_dia"]
     totals = frame.groupby("codi_estacio", as_index=False).agg(
         precipitacio=("valor_lectura", "sum"), lectures=("valor_lectura", "size"),
         ultima_lectura=("hora_local", "max"),
@@ -354,6 +370,93 @@ def calculate_interval_totals(rows: list[dict], start: datetime, end: datetime,
     incomplete = totals["lectures"] < totals["lectures_esperades"]
     totals.loc[incomplete, "estat_dades"] += " · acumulat parcial (falten lectures)"
     return totals[TOTAL_COLUMNS], report
+
+
+def _validate_station_code(station_code: str) -> str:
+    code = str(station_code).strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{1,8}", code):
+        raise DataError("El codi d'estació no és vàlid.")
+    return code
+
+
+def calculate_station_history(rows: list[dict], station_code: str, start: datetime,
+                              end: datetime, grouping: str = "Hores",
+                              include_provisional: bool = True) -> tuple[pd.DataFrame, dict]:
+    """Barres per hores reals o dies locals; els buits es conserven com a nuls."""
+    start, end = interval_bounds_utc(start, end)
+    code = _validate_station_code(station_code)
+    if grouping not in {"Hores", "Dies"}:
+        raise DataError("L'agrupació ha de ser per hores o per dies.")
+    station_rows = [row for row in rows if str(row.get("codi_estacio", "")).strip().upper() == code]
+    frame, report = _prepare_measurements(station_rows, start, end, include_provisional)
+    if grouping == "Hores":
+        boundaries = pd.date_range(pd.Timestamp(start).floor("h"),
+                                   pd.Timestamp(end).ceil("h"), freq="h")
+    else:
+        # Les mitjanits locals generen dies de 23/25 hores durant els canvis d'hora.
+        first_day = start.astimezone(LOCAL_TZ).date()
+        last_day = (end - timedelta(microseconds=1)).astimezone(LOCAL_TZ).date()
+        boundaries = pd.date_range(datetime.combine(first_day, time.min, LOCAL_TZ),
+                                   datetime.combine(last_day + timedelta(days=1), time.min, LOCAL_TZ),
+                                   freq="D").tz_convert("UTC")
+    grouped = {}
+    daily_bases = {}
+    fallback = "SH"
+    if not frame.empty:
+        bucket = (frame["data_lectura"].dt.floor("h") if grouping == "Hores"
+                  else frame["hora_local"].dt.normalize().dt.tz_convert("UTC"))
+        grouped = frame.groupby(bucket).agg(
+            precipitacio=("valor_lectura", "sum"), lectures=("valor_lectura", "size"),
+            provisionals=("_provisional", "sum"),
+        ).to_dict("index")
+        daily_bases = frame.drop_duplicates("_dia").set_index("_dia")["codi_base"].to_dict()
+        fallback = "SH" if frame["codi_base"].eq("SH").any() else "HO"
+    bars = []
+    for order, (left, right) in enumerate(zip(boundaries[:-1], boundaries[1:])):
+        clipped_left, clipped_right = max(left, pd.Timestamp(start)), min(right, pd.Timestamp(end))
+        local = left.tz_convert(LOCAL_TZ)
+        base = daily_bases.get(local.date(), fallback)
+        expected = _expected_slots(clipped_left.to_pydatetime(), clipped_right.to_pydatetime(), base)
+        values = grouped.get(left, {})
+        count = int(values.get("lectures", 0))
+        provisional = int(values.get("provisionals", 0))
+        coverage = "Sense lectures" if not count else ("Acumulat parcial" if count < expected else "Complet")
+        quality = "Pendent de validació" if provisional else "Validades (V)"
+        bars.append({
+            "ordre": order,
+            "periode": local.strftime("%d/%m %H:%M %Z" if grouping == "Hores" else "%d/%m/%Y"),
+            "inici": clipped_left.tz_convert(LOCAL_TZ).strftime("%d/%m/%Y %H:%M %Z"),
+            "final": clipped_right.tz_convert(LOCAL_TZ).strftime("%d/%m/%Y %H:%M %Z"),
+            "precipitacio": values.get("precipitacio", float("nan")),
+            "lectures": count, "lectures_esperades": expected, "cobertura": coverage,
+            "estat": coverage if not count else f"{quality} · {coverage.lower()}",
+        })
+    history = pd.DataFrame(bars)
+    report.update({
+        "inici": start.astimezone(LOCAL_TZ), "final": end.astimezone(LOCAL_TZ),
+        "precipitacio": float(history.precipitacio.sum()) if not frame.empty else None,
+        "lectures": len(frame),
+        "ultima_lectura": frame["hora_local"].max() if not frame.empty else None,
+        "provisionals": int(frame["_provisional"].sum()) if not frame.empty else 0,
+        "barres_sense_dades": int(history.cobertura.eq("Sense lectures").sum()),
+        "barres_parcials": int(history.cobertura.eq("Acumulat parcial").sum()),
+    })
+    return history, report
+
+
+def load_station_history(station_code: str, end: datetime, days: int,
+                         grouping: str = "Hores", include_provisional: bool = True) -> tuple[pd.DataFrame, dict]:
+    if days not in HISTORY_DAYS:
+        raise DataError("Tria un horitzó d'1, 3, 7, 15 o 30 dies.")
+    code = _validate_station_code(station_code)
+    if end.utcoffset() is None:
+        raise DataError("El final de l'històric ha d'incloure un fus horari.")
+    end = end.astimezone(timezone.utc)
+    start = end - timedelta(days=days)
+    rows, queried_at = fetch_interval_measurements(start, end, include_provisional, code)
+    history, report = calculate_station_history(rows, code, start, end, grouping, include_provisional)
+    report["consulta"] = queried_at
+    return history, report
 
 
 def load_daily_data(selected_day: date, include_provisional: bool = True) -> tuple[pd.DataFrame, dict]:
