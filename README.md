@@ -53,7 +53,8 @@ horaris per a `zoneinfo`, especialment necessària a Windows.
 - «Actualitza dades» buida les consultes de la cache; la cache caduca als 300 segons.
 - «Comarca» i «Precipitació mínima» afecten el mapa, el rànquing i el resum
   d'estacions i màxims. La darrera lectura disponible correspon al conjunt del període.
-- Els punts representen l'acumulat amb set trams de color i mida. Passant-hi el
+- Els punts tenen una mida fixa de 12 píxels de diàmetre, independentment de la
+  pluja acumulada i del zoom. Set trams de color representen l'acumulat. Passant-hi el
   cursor es veuen el nom, municipi, comarca, acumulat, lectures, última lectura
   amb el seu fus horari i estat de les dades. En tocar o clicar una estació,
   aquests detalls també apareixen en una fitxa sota el mapa.

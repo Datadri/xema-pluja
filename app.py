@@ -53,23 +53,25 @@ h1 {font-size: clamp(1.7rem, 3vw, 2.4rem) !important; line-height: 1.2 !importan
 </style>
 """
 
-# Llindars inclusius superiors, colors RGBA i radis en píxels.
+# Mida fixa en pantalla; només el color representa la precipitació.
+POINT_RADIUS_PX = 6
+# Llindars inclusius superiors i colors RGBA.
 SCALE = [
-    (0, "0 mm", [148, 163, 184, 200], 4),
-    (5, "0–5 mm", [56, 189, 248, 230], 6),
-    (20, "5–20 mm", [37, 99, 235, 240], 8),
-    (50, "20–50 mm", [16, 185, 129, 240], 10),
-    (100, "50–100 mm", [245, 158, 11, 245], 12),
-    (200, "100–200 mm", [239, 68, 68, 250], 15),
-    (float("inf"), ">200 mm", [168, 35, 190, 255], 19),
+    (0, "0 mm", [148, 163, 184, 200]),
+    (5, "0–5 mm", [56, 189, 248, 230]),
+    (20, "5–20 mm", [37, 99, 235, 240]),
+    (50, "20–50 mm", [16, 185, 129, 240]),
+    (100, "50–100 mm", [245, 158, 11, 245]),
+    (200, "100–200 mm", [239, 68, 68, 250]),
+    (float("inf"), ">200 mm", [168, 35, 190, 255]),
 ]
 
 
-def rain_style(value: float) -> tuple[list[int], int]:
-    for upper, _, color, radius in SCALE:
+def rain_color(value: float) -> list[int]:
+    for upper, _, color in SCALE:
         if value <= upper:
-            return color, radius
-    return SCALE[-1][2], SCALE[-1][3]
+            return color
+    return SCALE[-1][2]
 
 
 def render_station_history(station_code: str, period_end: datetime, include_provisional: bool) -> None:
@@ -143,17 +145,16 @@ def render_station_history(station_code: str, period_end: datetime, include_prov
 def render_map(frame, period_end: datetime, include_provisional: bool) -> None:
     # Dibuixa els episodis més intensos al final perquè quedin per sobre dels altres punts.
     points = frame.dropna(subset=["latitud", "longitud"]).sort_values("precipitacio").copy()
-    points["color"] = points["precipitacio"].map(lambda value: rain_style(value)[0])
-    points["radius"] = points["precipitacio"].map(lambda value: rain_style(value)[1])
+    points["color"] = points["precipitacio"].map(rain_color)
     points["pluja_text"] = points["precipitacio"].map(lambda value: f"{value:.1f} mm")
     points["ultima_text"] = points["ultima_lectura"].map(lambda value: value.strftime("%d/%m/%Y %H:%M %Z"))
     fields = ["codi_estacio", "nom", "municipi", "comarca", "latitud", "longitud",
-              "color", "radius", "pluja_text", "lectures", "ultima_text", "estat_dades"]
+              "color", "pluja_text", "lectures", "ultima_text", "estat_dades"]
     layer = pdk.Layer(
         "ScatterplotLayer", data=points[fields].to_dict("records"),
-        get_position="[longitud, latitud]", get_fill_color="color", get_radius="radius",
+        get_position="[longitud, latitud]", get_fill_color="color", get_radius=POINT_RADIUS_PX,
         # Pydeck exigeix cometes internes per a un literal, en lloc d'un accessor.
-        radius_units="'pixels'", radius_min_pixels=4, radius_max_pixels=19,
+        radius_units="'pixels'", radius_min_pixels=POINT_RADIUS_PX, radius_max_pixels=POINT_RADIUS_PX,
         id="estacions-xema", pickable=True, stroked=True, filled=True,
         get_line_color=[255, 255, 255, 230], line_width_min_pixels=1,
     )
@@ -168,7 +169,7 @@ def render_map(frame, period_end: datetime, include_provisional: bool) -> None:
     selection = st.pydeck_chart(deck, height=570, key="rain_map",
                                 on_select="rerun", selection_mode="single-object")
     items = []
-    for _, label, color, _ in SCALE:
+    for _, label, color in SCALE:
         rgb = ",".join(map(str, color[:3]))
         items.append(f'<span><i style="background:rgb({rgb});"></i>{label}</span>')
     st.markdown('<div class="rain-legend">' + "".join(items) + "</div>", unsafe_allow_html=True)
