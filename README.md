@@ -50,20 +50,27 @@ horaris per a `zoneinfo`, especialment necessària a Windows.
 - «Entre dues dates i hores» permet triar data i hora d'inici i de final,
   en hora local de Catalunya, i aplicar-les amb «Mostra acumulat».
   El mateix període afecta el mapa, el resum i el rànquing.
+  El formulari es pot plegar després d'aplicar-lo per donar més espai al mapa;
+  els límits consultats continuen visibles.
 - «Actualitza dades» buida les consultes de la cache; la cache caduca als 300 segons.
+- «Filtres de territori i dades», al costat dels controls del període, agrupa
+  comarca, precipitació mínima i criteri de validació. La selecció territorial
+  i el criteri de dades queden visibles sobre el mapa, encara que es pleguin els filtres.
 - «Comarca» i «Precipitació mínima» afecten el mapa, el rànquing i el resum
   d'estacions i màxims. La darrera lectura disponible correspon al conjunt del període.
 - Els punts tenen una mida fixa de 12 píxels de diàmetre, independentment de la
   pluja acumulada i del zoom. Set trams de color representen l'acumulat. Passant-hi el
-  cursor es veuen el nom, municipi, comarca, acumulat, lectures, última lectura
-  amb el seu fus horari i estat de les dades. En tocar o clicar una estació,
-  aquests detalls també apareixen en una fitxa sota el mapa.
+  cursor es veuen el nom, ubicació, acumulat, període i última lectura amb el seu
+  fus horari. En tocar o clicar una estació, la fitxa sota el mapa afegeix el
+  nombre de lectures i l'estat de les dades. També es pot cercar una estació pel
+  nom amb el selector «Consulta una estació», accessible amb teclat i en mòbil.
 - La fitxa inclou un histograma de l'estació, amb horitzons d'1, 3, 7, 15 o 30
   dies i agrupació per hores o per dies. Passa el cursor per una barra per veure
   la pluja, el nombre de lectures i l'estat de les dades.
-- En mòbil, els indicadors són compactes, la llegenda ocupa diverses línies i
-  l'alçada del mapa s'adapta a la pantalla. Els filtres s'obren amb la fletxa
-  de la cantonada superior esquerra. La taula es pot desplaçar horitzontalment.
+- En mòbil, els controls es distribueixen en dues columnes, els indicadors són
+  compactes, la llegenda ocupa tres columnes i l'alçada del mapa s'adapta a la
+  pantalla. Els filtres es despleguen al mateix flux de la pàgina. La taula
+  prioritza estació i pluja; es pot desplaçar dins del seu espai per veure municipi i comarca.
 - La taula mostra les 20 estacions amb més precipitació i permet ampliar-la i
   ordenar-la clicant les capçaleres.
 - Les estacions sense lectures no es dibuixen com si haguessin registrat 0 mm.
@@ -266,3 +273,42 @@ UTC; l'interval addicional era de 0,0 mm. Aquest contrast confirma també que
 començar a les 00:00 UTC hauria omès 47,4 mm d'aquest dia local.
 La consulta manual del web només s'ha utilitzat per validar: l'aplicació
 obté totes les observacions de Socrata.
+
+## Revisió de la interfície — 7 d'octubre de 2026
+
+L'auditoria ha revisat l'única pantalla, el formulari d'intervals, els filtres,
+el mapa Pydeck, la fitxa i l'histograma d'estació, el rànquing i els estats de dades.
+Els problemes prioritaris eren:
+
+- **Dades i jerarquia:** l'última lectura destacava tant com la màxima, sense
+  data completa en la vista diària. El període i el territori no quedaven junts.
+- **Mapa i layout:** tres cards i diversos textos previs desplaçaven el mapa;
+  els marges reduïen la superfície disponible. La llegenda ja era útil i es conserva.
+- **Filtres i interacció:** els filtres quedaven en una barra lateral plegada;
+  calia encertar un punt de 12 píxels per obrir l'histograma en mòbil.
+- **Espaiat, consistència i tipografia:** les regles estaven disperses, amb
+  cards més prominents del necessari i espaiats poc coherents entre grups.
+- **Color i accessibilitat:** es conserva l'escala de pluja i l'accent blau;
+  es reforcen el contrast dels textos auxiliars, els labels, el focus i els controls.
+- **Responsive:** els controls temporals requerien més espai, la capçalera
+  podia quedar sota la barra fixa i els valors del rànquing quedaven fora de la vista estreta.
+
+Les millores segueixen el flux **context → controls → mapa → detall**: resum
+compacte amb màxima i estació, període i filtres visibles, última lectura amb
+data i fus, mapa de 600 píxels en desktop i alçada adaptable en mòbil, llegenda
+vinculada al mapa i cercador d'estacions. Els avisos i la metodologia continuen
+accessibles, amb menys competència visual. Els valors visibles utilitzen coma
+decimal i unitats; les taules conserven dades numèriques per ordenar correctament.
+
+El petit sistema visual centralitza colors, espaiats, radi i focus en variables
+CSS i el tema Streamlit. Es mantenen els widgets natius, els set colors i els
+cercles fixos. No s'han modificat `data.py`, les consultes, els càlculs ni les dependències.
+
+La revisió s'ha comprovat amb l'aplicació real i dades Socrata: vista diària,
+interval del 04/10/2026 de 00:00 a 02:00 CEST, cerca de Granollers i histogrames
+horari i diari. S'han revisat amplades de 1366, 768, 390 i 320 píxels, sense
+desbordament de la pàgina; el desplaçament de les taules queda dins del component.
+El focus de teclat és visible i els textos auxiliars tenen contrast suficient
+sobre el fons blanc. Les proves `AppTest` cobreixen filtres, resultats buits,
+absència de lectures, error de la font, interval invàlid, horitzons d'històric
+i sincronització entre mapa i cercador.
