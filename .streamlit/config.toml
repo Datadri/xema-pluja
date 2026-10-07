@@ -1,10 +1,21 @@
 [browser]
 gatherUsageStats = false
 
+[server]
+enableStaticServing = true
+
 [theme]
 base = "light"
-primaryColor = "#2563eb"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f4f6f8"
-textColor = "#182b3a"
-font = "sans serif"
+primaryColor = "#176572"
+backgroundColor = "#f4f7f8"
+secondaryBackgroundColor = "#eaf0f2"
+textColor = "#18323d"
+font = "Inter, sans-serif"
+baseRadius = "8px"
+borderColor = "#d5dfe3"
+
+[[theme.fontFaces]]
+family = "Inter"
+url = "app/static/InterVariable.woff2"
+weight = "100 900"
+style = "normal"

@@ -1,8 +1,10 @@
 """Interfície Streamlit del mapa de precipitació acumulada XEMA."""
 
 from datetime import date, datetime, time, timedelta, timezone
+from base64 import b64encode
 from html import escape
 from math import isfinite
+from pathlib import Path
 
 import pydeck as pdk
 import streamlit as st
@@ -11,59 +13,93 @@ from data import (HISTORY_DAYS, LOCAL_TZ, MAX_INTERVAL_DAYS, DataError, clear_ca
                   interval_bounds_utc, load_interval_data, local_datetime_candidates,
                   load_station_history, resolve_local_datetime)
 
-st.set_page_config(page_title="Pluja acumulada a Catalunya", page_icon="🌧️",
+st.set_page_config(page_title="Pluja Cat · Precipitació a Catalunya",
+                   page_icon=str(Path(__file__).parent / "static" / "gota.svg"),
                    layout="wide", initial_sidebar_state="collapsed")
 
 # Un sistema visual petit; els controls continuen sent natius de Streamlit.
 RESPONSIVE_CSS = """
 <style>
 :root {
-    --rain-text: #182b3a; --rain-muted: #506170; --rain-border: #d9e1e7;
-    --rain-surface: #f4f6f8; --rain-focus: #2563eb; --rain-radius: 8px;
+    --rain-bg: #f4f7f8; --rain-surface: #ffffff; --rain-secondary: #eaf0f2;
+    --rain-text: #18323d; --rain-muted: #536974; --rain-border: #d5dfe3;
+    --rain-primary: #176572; --rain-focus: #176572;
+    --rain-radius-sm: 8px; --rain-radius-md: 12px;
+    --rain-shadow: 0 2px 12px rgba(24,50,61,.05);
+    --rain-font: 'Inter', sans-serif; --rain-type-small: .8125rem;
+    --rain-type-label: .875rem; --rain-control-height: 44px; --rain-max-width: 1440px;
     --rain-space-1: 4px; --rain-space-2: 8px; --rain-space-3: 12px;
-    --rain-space-4: 16px; --rain-space-6: 24px;
+    --rain-space-4: 16px; --rain-space-6: 24px; --rain-space-8: 32px;
 }
-.block-container {padding: 1rem 2rem 2rem; max-width: 1480px;}
+[data-testid="stAppViewContainer"] {background: var(--rain-bg);}
+.block-container {padding: 3rem 2rem 2rem; max-width: var(--rain-max-width);}
 [data-testid="stVerticalBlock"] {gap: var(--rain-space-4);}
-h1 {font-size: clamp(1.5rem, 2.5vw, 2rem) !important; line-height: 1.2 !important; padding-bottom: 0 !important;}
-h2 {font-size: 1.35rem !important; line-height: 1.3 !important; padding: 0 !important;}
-h3 {font-size: 1.15rem !important; padding: 0 !important;}
-.st-key-header {gap: var(--rain-space-2) !important;}
-.st-key-header [data-testid="stCaptionContainer"] {margin-top: var(--rain-space-2);}
+h1 {font-size: 1.625rem !important; font-weight: 650 !important; letter-spacing: -.045em !important; line-height: 1.2 !important; padding: 0 !important;}
+h2 {font-size: 1.25rem !important; font-weight: 600 !important; letter-spacing: -.025em; line-height: 1.3 !important; padding: 0 !important;}
+h3 {font-size: 1rem !important; font-weight: 600 !important; padding: 0 !important;}
+.brand-header {display: flex; align-items: center; gap: var(--rain-space-3);
+    padding: 0 0 var(--rain-space-4); border-bottom: 1px solid var(--rain-border);}
+.brand-mark {width: 32px; height: 36px; flex: 0 0 32px;}
+.brand-header h1 {margin: 0;}
+.brand-header p {margin: var(--rain-space-1) 0 0; color: var(--rain-muted);
+    font-size: var(--rain-type-small); line-height: 1.5;}
 .st-key-map_context {gap: var(--rain-space-1) !important;}
-[data-testid="stCaptionContainer"] {color: var(--rain-muted); opacity: 1 !important;}
-button, input {min-height: 44px;}
-button {border-radius: var(--rain-radius) !important;}
+[data-testid="stCaptionContainer"] {color: var(--rain-muted); opacity: 1 !important; font-size: var(--rain-type-small);}
+[data-testid="stWidgetLabel"] p {font-size: var(--rain-type-label);}
+button, input {min-height: var(--rain-control-height);}
+button {border-radius: var(--rain-radius-sm) !important;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;}
+[data-testid="stBaseButton-secondary"] {background: var(--rain-surface); border-color: var(--rain-border);}
+[data-testid="stBaseButton-secondary"]:hover {background: var(--rain-secondary); border-color: var(--rain-primary); color: var(--rain-text);}
+[data-testid="stBaseButton-primary"]:hover {background: #124f5a; border-color: #124f5a;}
+[data-baseweb="input"], [data-baseweb="select"] > div {background: var(--rain-surface); border-radius: var(--rain-radius-sm);}
+button[data-variant="segmented_control"] {padding: .5rem .375rem !important; min-height: var(--rain-control-height) !important;}
+button[data-variant="segmented_control"] p {font-size: var(--rain-type-label) !important;}
+[data-testid="stDateInputField"], [data-testid="stTimeInputField"], [data-testid="stTimeInputTimeDisplay"],
+[data-testid="stNumberInputContainer"], div:has(> input[role="combobox"]) {
+    min-height: var(--rain-control-height); background: var(--rain-surface); border-radius: var(--rain-radius-sm);}
 button:focus-visible, input:focus-visible, [role="combobox"]:focus-visible,
 summary:focus-visible {outline: 3px solid var(--rain-focus) !important; outline-offset: 2px;}
-[data-testid="stExpander"] {border-color: var(--rain-border); border-radius: var(--rain-radius);}
-[data-testid="stExpander"] summary {min-height: 44px;}
+[data-testid="stDateInputField"]:focus-within, [data-testid="stTimeInputTimeDisplay"]:focus-within {
+    outline: 3px solid var(--rain-focus); outline-offset: 2px;}
+[data-testid="stExpander"] {border-color: var(--rain-border); border-radius: var(--rain-radius-sm); background: var(--rain-surface);}
+[data-testid="stExpander"] summary {min-height: var(--rain-control-height);}
+[data-testid="stExpander"] summary:hover {background: var(--rain-secondary);}
 .st-key-controls [data-testid="stHorizontalBlock"],
 .st-key-interval_controls [data-testid="stHorizontalBlock"] {gap: var(--rain-space-3);}
-.st-key-controls [role="radiogroup"] {min-height: 44px; align-items: center;}
-.st-key-controls [data-testid="stRadio"] label {min-height: 36px;}
-.map-period {margin: 0; color: var(--rain-text); font-size: 1rem; font-weight: 650; line-height: 1.5;}
-.map-scope {margin: 0; color: var(--rain-muted); font-size: .85rem; line-height: 1.5;}
+.map-period {margin: 0 !important; color: var(--rain-text); font-size: 1rem; font-weight: 600 !important; line-height: 1.5; font-variant-numeric: tabular-nums;}
+.map-scope {margin: var(--rain-space-1) 0 0 !important; color: var(--rain-muted); font-size: var(--rain-type-small) !important; line-height: 1.5;}
 .weather-summary {display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-    gap: var(--rain-space-6); padding: var(--rain-space-2) 0;
-    border-top: 1px solid var(--rain-border); border-bottom: 1px solid var(--rain-border);}
+    gap: var(--rain-space-6); padding: var(--rain-space-3) 0;
+    border-bottom: 1px solid var(--rain-border);}
 .weather-summary dl {margin: 0; min-width: 0;}
-.weather-summary dt {font-size: .85rem; color: var(--rain-muted);}
+.weather-summary dt {font-size: var(--rain-type-small); color: var(--rain-muted);}
 .weather-summary dd {display: flex; align-items: baseline; gap: var(--rain-space-3);
     margin: var(--rain-space-1) 0 0; color: var(--rain-text);
-    font-size: 1.5rem; font-weight: 650; line-height: 1.15; font-variant-numeric: tabular-nums;}
-.weather-summary small {font-size: .85rem;
+    font-size: 1.75rem; font-weight: 600; letter-spacing: -.035em; line-height: 1.15; font-variant-numeric: tabular-nums;}
+.weather-summary dl:first-child dd {font-size: 2.25rem;}
+.rain-unit {font-size: .55em; font-weight: 500; letter-spacing: 0; color: var(--rain-muted);}
+.weather-summary small {font-size: var(--rain-type-small); letter-spacing: 0;
     font-weight: 400; line-height: 1.4; color: var(--rain-muted);}
 .st-key-map_context_updates {gap: var(--rain-space-1) !important;}
-.st-key-rain_map [data-testid="stDeckGlJsonChart"] {border-radius: var(--rain-radius); overflow: hidden;}
+.st-key-map_surface {gap: 0 !important; background: var(--rain-surface); border: 1px solid var(--rain-border);
+    border-radius: var(--rain-radius-md); box-shadow: var(--rain-shadow); overflow: hidden;}
+.st-key-map_surface [data-testid="stVerticalBlock"] {gap: 0;}
+.st-key-rain_map [data-testid="stDeckGlJsonChart"] {overflow: hidden;}
 .st-key-rain_map .maplibregl-ctrl-group button {width: 44px; height: 44px;}
-.legend-title {margin: 0 0 var(--rain-space-2); font-size: .8rem; font-weight: 600; color: var(--rain-muted);}
-.rain-legend {display: flex; flex-wrap: wrap; gap: var(--rain-space-2) var(--rain-space-4); font-size: .85rem; color: var(--rain-text);}
-.rain-legend span {display: inline-flex; align-items: center; gap: var(--rain-space-2); white-space: nowrap;}
-.rain-legend i {width: 12px; height: 12px; border-radius: 50%; display: inline-block; flex: 0 0 12px; border: 1px solid rgba(0,0,0,.12);}
+.map-legend {padding: var(--rain-space-3) var(--rain-space-4); border-top: 1px solid var(--rain-border);}
+.legend-title {margin: 0 0 var(--rain-space-2) !important; font-size: var(--rain-type-small) !important; font-weight: 500 !important; color: var(--rain-muted);}
+.rain-legend {display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; max-width: 780px; font-size: var(--rain-type-small); color: var(--rain-text);}
+.rain-legend span {display: flex; flex-direction: column; gap: var(--rain-space-1); white-space: nowrap; line-height: 1.4;}
+.rain-legend i {height: 6px; display: block;}
+.rain-legend span:first-child i {border-radius: 3px 0 0 3px;}
+.rain-legend span:last-child i {border-radius: 0 3px 3px 0;}
 .st-key-station_details {border-top: 1px solid var(--rain-border); padding-top: var(--rain-space-4);}
-.station-rain {font-size: 1.75rem; font-weight: 650; color: var(--rain-text); margin: 0; font-variant-numeric: tabular-nums;}
+.station-rain {font-size: 2.25rem !important; font-weight: 600 !important; letter-spacing: -.035em; color: var(--rain-text); margin: 0 !important; line-height: 1.2; font-variant-numeric: tabular-nums;}
+.st-key-history_controls [data-testid="stHorizontalBlock"] {gap: var(--rain-space-6);}
+[data-testid="stDataFrame"] {border-radius: var(--rain-radius-sm);}
 .st-key-ranking_controls [data-testid="stHorizontalBlock"] {align-items: end;}
+@media (prefers-reduced-motion: reduce) {button {transition: none;}}
 @media (max-width: 900px) {
     .block-container {padding-right: 1rem; padding-left: 1rem;}
     .st-key-controls [data-testid="stHorizontalBlock"] {
@@ -76,13 +112,16 @@ summary:focus-visible {outline: 3px solid var(--rain-focus) !important; outline-
 }
 @media (max-width: 640px) {
     /* Deixa espai per a la barra fixa de Streamlit de 60 px. */
-    .block-container {padding: 2rem 1rem 2rem;}
+    .block-container {padding: 3rem 1rem 2rem;}
     [data-testid="stVerticalBlock"] {gap: var(--rain-space-3);}
     h1 {font-size: 1.5rem !important;}
+    .brand-header {padding-bottom: var(--rain-space-3);}
+    .brand-header p {max-width: 30ch;}
     .st-key-controls button {padding: .4rem .5rem;}
     .st-key-controls button p {white-space: normal !important;}
     .weather-summary {gap: var(--rain-space-3); grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);}
-    .weather-summary dd {display: block;}
+    .weather-summary dd {display: block; font-size: 1.5rem;}
+    .weather-summary dl:first-child dd {font-size: 2rem;}
     .weather-summary small {display: block; margin-top: var(--rain-space-1);}
     /* Streamlit reserva l'alçada amb flex-basis, a més del mapa interior. */
     .st-key-rain_map {flex: 0 0 auto !important;}
@@ -92,8 +131,11 @@ summary:focus-visible {outline: 3px solid var(--rain-focus) !important; outline-
     .st-key-rain_map [data-testid="stDeckGlJsonChart"] > div:not([data-testid]) {
         height: clamp(360px, 52svh, 480px) !important; min-height: 0 !important;
     }
-    .rain-legend {display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--rain-space-2); font-size: .75rem;}
-    .rain-legend span {gap: var(--rain-space-1);}
+    .map-legend {padding: var(--rain-space-3);}
+    .rain-legend {grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--rain-space-2) var(--rain-space-3); font-size: .75rem;}
+    .rain-legend i {border-radius: 3px !important;}
+    .st-key-history_controls [data-testid="stHorizontalBlock"] {flex-direction: column; gap: var(--rain-space-3);}
+    .st-key-history_controls [data-testid="stColumn"] {width: 100% !important;}
     .st-key-ranking_controls [data-testid="stHorizontalBlock"] {flex-direction: column; align-items: stretch;}
     .st-key-ranking_controls [data-testid="stColumn"] {width: 100% !important;}
     [data-testid="stDataFrame"] {max-width: 100%;}
@@ -129,6 +171,27 @@ def format_mm(value: float) -> str:
     return f"{float(value):.1f}".rstrip("0").rstrip(".").replace(".", ",") + " mm"
 
 
+def rain_value_html(value: float) -> str:
+    """La unitat pesa menys visualment; el valor continua llegible com a text."""
+    return format_mm(value).replace(" mm", ' <span class="rain-unit">mm</span>')
+
+
+def keep_exclusive_selection(key: str) -> None:
+    # Un segment actiu es pot desmarcar a Streamlit: conserva la darrera opció.
+    previous_key = f"_{key}_selected"
+    if st.session_state[key] is None:
+        st.session_state[key] = st.session_state[previous_key]
+    else:
+        st.session_state[previous_key] = st.session_state[key]
+
+
+def exclusive_control(label: str, options, key: str, format_func=str):
+    previous = st.session_state.setdefault(f"_{key}_selected", options[0])
+    st.session_state.setdefault(key, previous)
+    return st.segmented_control(label, options, key=key,
+                                format_func=format_func, on_change=keep_exclusive_selection, args=(key,))
+
+
 def period_label(start: datetime, end: datetime, selected_day: date | None) -> str:
     if selected_day is not None:
         prefix = "Avui" if selected_day == datetime.now(LOCAL_TZ).date() else "Dia"
@@ -138,9 +201,13 @@ def period_label(start: datetime, end: datetime, selected_day: date | None) -> s
 
 def render_station_history(station_code: str, period_end: datetime, include_provisional: bool) -> None:
     st.markdown("### Histograma de precipitació")
-    days = st.radio("Horitzó temporal", HISTORY_DAYS, horizontal=True, key="history_days",
-                     format_func=lambda value: "1 dia" if value == 1 else f"{value} dies")
-    grouping = st.radio("Agrupa la pluja per", ["Hores", "Dies"], horizontal=True, key="history_grouping")
+    with st.container(key="history_controls"):
+        horizon_col, grouping_col = st.columns([3, 2])
+        with horizon_col:
+            days = exclusive_control("Horitzó temporal", HISTORY_DAYS, "history_days",
+                                     lambda value: "1 dia" if value == 1 else f"{value} dies")
+        with grouping_col:
+            grouping = exclusive_control("Agrupa la pluja per", ["Hores", "Dies"], "history_grouping")
     # Per a avui, no es consulta més enllà de l'últim tall de mitja hora.
     now = datetime.now(timezone.utc)
     current_cutoff = now.replace(minute=now.minute // 30 * 30, second=0, microsecond=0)
@@ -163,7 +230,12 @@ def render_station_history(station_code: str, period_end: datetime, include_prov
     # Etiquetes locals explícites: l'hora del gràfic no depèn del fus del navegador.
     spec = {
         "height": 300,
-        "mark": {"type": "bar", "tooltip": True},
+        "background": "#ffffff",
+        "config": {"font": "Inter", "view": {"stroke": None},
+                   "axis": {"labelColor": "#536974", "titleColor": "#18323d",
+                            "gridColor": "#eaf0f2", "domainColor": "#d5dfe3"},
+                   "legend": {"labelColor": "#536974"}},
+        "mark": {"type": "bar", "tooltip": True, "cornerRadiusTopLeft": 2, "cornerRadiusTopRight": 2},
         "encoding": {
             "x": {"field": "periode", "type": "ordinal", "title": "Hora local de Catalunya" if grouping == "Hores" else "Dia local de Catalunya",
                   "sort": {"field": "ordre", "order": "ascending"},
@@ -191,7 +263,7 @@ def render_station_history(station_code: str, period_end: datetime, include_prov
         st.warning(f"Històric incomplet: {report['barres_sense_dades']} períodes sense lectures i "
                    f"{report['barres_parcials']} períodes amb lectures incompletes. L'acumulat disponible pot ser parcial.")
     if report["provisionals"]:
-        st.caption("⚠️ L'històric inclou dades pendents de validació definitiva per Meteocat.")
+        st.caption("L'històric inclou dades pendents de validació definitiva per Meteocat.")
     if report["conflictes"] or report["altres_bases"] or report["descartades"]:
         st.caption(f"Control de qualitat de l'històric: {report['conflictes']} duplicats amb valors diferents, "
                    f"{report['altres_bases']} lectures de bases alternatives excloses i "
@@ -230,19 +302,26 @@ def render_map(frame, period_end: datetime, include_provisional: bool, period_te
         # El zoom inicial permet veure Catalunya sencera també en una pantalla estreta.
         layers=[layer], initial_view_state=pdk.ViewState(latitude=41.8, longitude=1.7, zoom=6),
         map_provider="carto", map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-        tooltip={"html": "<b>{nom}</b><br/>{municipi} · {comarca}<br/><b>{pluja_text}</b>"
-                           "<br/>{periode_text}<br/>Última lectura: {ultima_text}",
-                 "style": {"backgroundColor": "#182b3a", "color": "white", "fontSize": "14px",
-                           "lineHeight": "1.5", "padding": "12px", "borderRadius": "8px", "maxWidth": "280px"}},
+        tooltip={"html": '<div style="font-weight:600">{nom}</div>'
+                           '<div style="font-size:12px;color:#c8d8de">{municipi} · {comarca}</div>'
+                           '<div style="font-size:24px;font-weight:600;margin:8px 0;font-variant-numeric:tabular-nums">{pluja_text}</div>'
+                           '<div style="font-size:12px">{periode_text}</div>'
+                           '<div style="font-size:12px;margin-top:8px">{lectures} lectures · {estat_dades}'
+                           '<br/>Última lectura: {ultima_text}</div>',
+                 "style": {"backgroundColor": "#18323d", "color": "white", "fontFamily": "Inter, sans-serif",
+                           "fontSize": "14px", "lineHeight": "1.5", "padding": "16px",
+                           "borderRadius": "8px", "maxWidth": "300px", "boxShadow": "0 2px 12px rgba(24,50,61,.15)"}},
     )
-    selection = st.pydeck_chart(deck, height=600, key="rain_map",
-                                on_select="rerun", selection_mode="single-object")
-    items = []
-    for _, label, color in SCALE:
-        rgb = ",".join(map(str, color[:3]))
-        items.append(f'<span><i aria-hidden="true" style="background:rgb({rgb});"></i>{label}</span>')
-    st.markdown('<section aria-label="Llegenda de precipitació"><p class="legend-title">Precipitació acumulada</p>'
-                '<div class="rain-legend">' + "".join(items) + "</div></section>", unsafe_allow_html=True)
+    with st.container(key="map_surface"):
+        selection = st.pydeck_chart(deck, height=600, key="rain_map",
+                                    on_select="rerun", selection_mode="single-object")
+        items = []
+        for _, label, color in SCALE:
+            rgb = ",".join(map(str, color[:3]))
+            items.append(f'<span><i aria-hidden="true" style="background:rgb({rgb});"></i>{label}</span>')
+        st.markdown('<section class="map-legend" aria-label="Llegenda de precipitació">'
+                    '<p class="legend-title">Precipitació acumulada · mm</p>'
+                    '<div class="rain-legend">' + "".join(items) + "</div></section>", unsafe_allow_html=True)
     if status_text:
         st.caption(status_text)
     st.caption("Toca un punt o cerca una estació per consultar-ne l'acumulat i l'histograma.")
@@ -260,8 +339,7 @@ def render_map(frame, period_end: datetime, include_provisional: bool, period_te
     station_code = st.selectbox(
         "Consulta una estació", codes, index=None, key="station_picker",
         placeholder="Cerca pel nom de l'estació…", disabled=not codes,
-        format_func=lambda code: f"{stations.loc[code, 'nom']} · {stations.loc[code, 'comarca']} · "
-                                 f"{format_mm(stations.loc[code, 'precipitacio'])}",
+        format_func=lambda code: f"{stations.loc[code, 'nom']} · {stations.loc[code, 'comarca']}",
     )
     if station_code is not None:
         station = stations.loc[station_code]
@@ -269,7 +347,7 @@ def render_map(frame, period_end: datetime, include_provisional: bool, period_te
             st.caption("Estació seleccionada · " + period_text)
             st.header(station["nom"])
             st.caption(f"{station['municipi']} · {station['comarca']}")
-            st.markdown(f'<p class="station-rain">{format_mm(station["precipitacio"])}</p>', unsafe_allow_html=True)
+            st.markdown(f'<p class="station-rain">{rain_value_html(station["precipitacio"])}</p>', unsafe_allow_html=True)
             st.caption(f"Última lectura: {station['ultima_lectura']:%d/%m/%Y %H:%M %Z} · {station['lectures']} lectures")
             st.caption(f"Estat de les dades: {station['estat_dades']}")
             render_station_history(station_code, period_end, include_provisional)
@@ -294,8 +372,8 @@ def period_controls() -> tuple[datetime, datetime, date | None]:
     with st.container(key="controls"):
         mode_col, date_col, button_col = st.columns([2, 2, 1], vertical_alignment="bottom")
         with mode_col:
-            mode = st.radio("Període", ["Un dia", "Entre dues dates i hores"], horizontal=True,
-                            key="period_mode", label_visibility="collapsed")
+            mode = exclusive_control("Període", ["Un dia", "Entre dues dates i hores"], "period_mode",
+                                     lambda value: "Dates i hores" if value != "Un dia" else value)
         with button_col:
             if st.button("Actualitza dades", width="stretch"):
                 clear_cache()
@@ -337,8 +415,11 @@ def period_controls() -> tuple[datetime, datetime, date | None]:
 def main() -> None:
     st.markdown(RESPONSIVE_CSS, unsafe_allow_html=True)
     with st.container(key="header"):
-        st.title("🌧️ Pluja acumulada a Catalunya")
-        st.caption("Estacions automàtiques XEMA — Meteocat")
+        mark = (Path(__file__).parent / "static" / "gota.svg").read_text(encoding="utf-8")
+        mark_url = "data:image/svg+xml;base64," + b64encode(mark.encode()).decode()
+        st.html(f'<header class="brand-header"><img class="brand-mark" src="{mark_url}" alt=""/>'
+                '<div><h1>Pluja Cat</h1>'
+                '<p>Pluja acumulada a Catalunya · XEMA — Meteocat</p></div></header>')
     try:
         start, end, selected_day = period_controls()
     except DataError as exc:
@@ -373,7 +454,7 @@ def main() -> None:
     with st.container(key="map_context"):
         st.markdown(f'<p class="map-period">{escape(label)}</p><p class="map-scope">{escape(scope)}</p>',
                     unsafe_allow_html=True)
-    maximum = format_mm(top["precipitacio"]) if top is not None else "Sense dades"
+    maximum = rain_value_html(top["precipitacio"]) if top is not None else "Sense dades"
     station = f"{top['nom']} · {top['comarca']}" if top is not None else "Cap estació amb dades per a aquesta selecció"
     wet_count = int(filtered["precipitacio"].gt(0).sum())
     st.markdown(

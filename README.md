@@ -1,4 +1,4 @@
-# 🌧️ Pluja acumulada a Catalunya
+# Pluja Cat — Precipitació acumulada a Catalunya
 
 Aplicació local amb Python i Streamlit per visualitzar la precipitació acumulada
 del dia civil de Catalunya, o d'un interval de dates i hores, a les estacions
@@ -47,7 +47,7 @@ horaris per a `zoneinfo`, especialment necessària a Windows.
 ## Ús
 
 - El selector de data comença amb el dia actual a `Europe/Madrid`.
-- «Entre dues dates i hores» permet triar data i hora d'inici i de final,
+- El segment «Dates i hores» permet triar data i hora d'inici i de final,
   en hora local de Catalunya, i aplicar-les amb «Mostra acumulat».
   El mateix període afecta el mapa, el resum i el rànquing.
   El formulari es pot plegar després d'aplicar-lo per donar més espai al mapa;
@@ -312,3 +312,32 @@ El focus de teclat és visible i els textos auxiliars tenen contrast suficient
 sobre el fons blanc. Les proves `AppTest` cobreixen filtres, resultats buits,
 absència de lectures, error de la font, interval invàlid, horitzons d'històric
 i sincronització entre mapa i cercador.
+
+## Segona passada de disseny — 7 d'octubre de 2026
+
+La identitat «Pluja Cat» utilitza una gota simple i la tipografia variable
+[Inter](https://github.com/rsms/inter). La font es distribueix amb el projecte a
+`static/InterVariable.woff2`, amb la seva llicència SIL Open Font License a
+`static/Inter-LICENSE.txt`; Streamlit la serveix localment, sense Google Fonts.
+La gota es conserva com a SVG a `static/gota.svg`.
+
+El tema i els tokens CSS comparteixen fons gris blavós, superfície blanca,
+text slate i accent teal. Els set colors de precipitació conserven el seu
+significat i els cercles mantenen el diàmetre fix de 12 píxels. El resum té
+números tabulars i unitats secundàries; el mapa i la llegenda formen una sola
+superfície amb radi de 12 píxels, vora fina i ombra subtil. La llegenda segueix
+els intervals reals, sense interpolar colors entre categories.
+
+Els segments de període, horitzó i agrupació mantenen una opció seleccionada.
+Els controls tenen almenys 44 píxels d'alçada, focus visible i transicions
+curtes que es desactiven quan es demana reduir el moviment. La cerca d'estació
+mostra nom i comarca; el seu acumulat es llegeix al detall i al rànquing.
+No s'han afegit dependències de Python ni modificat els càlculs de `data.py`.
+
+Verificació: aplicació real amb Socrata, episodi del 04/10/2026 (Granollers,
+215,8 mm), histograma diari de set dies i formulari d'interval. S'han revisat
+1366, 768, 390 i 320 píxels, sense desbordament de pàgina i amb els cinc
+horitzons visibles a 320 píxels. `AppTest` comprova filtres, selecció sincronitzada,
+intervals UTC, histogrames, selecció obligatòria dels segments i estats d'error
+o sense dades. Contrast calculat: text secundari 5,36:1 sobre el fons,
+botó principal 6,69:1. El focus s'ha comprovat amb teclat.
