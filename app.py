@@ -84,7 +84,10 @@ summary:focus-visible {outline: 3px solid var(--rain-focus) !important; outline-
     .weather-summary {gap: var(--rain-space-3); grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);}
     .weather-summary dd {display: block;}
     .weather-summary small {display: block; margin-top: var(--rain-space-1);}
+    /* Streamlit reserva l'alçada amb flex-basis, a més del mapa interior. */
+    .st-key-rain_map {flex: 0 0 auto !important;}
     .st-key-rain_map,
+    .st-key-rain_map [data-testid="stFullScreenFrame"],
     .st-key-rain_map [data-testid="stDeckGlJsonChart"],
     .st-key-rain_map [data-testid="stDeckGlJsonChart"] > div:not([data-testid]) {
         height: clamp(360px, 52svh, 480px) !important; min-height: 0 !important;
